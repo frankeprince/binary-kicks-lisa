@@ -264,7 +264,7 @@ for run in range(current_run + 1, RUNS + current_run + 1):
 
     print("Sampling initial binaries")
     sample_start = time.time()
-    pop.sample_initial_binaries(reset_sampled_kicks=False)
+    pop.sample_initial_binaries()
     print(f"Time taken to sample binaries: {time.time() - sample_start:.2f} seconds")
     print("Evolving binaries")
     evol_start = time.time()
@@ -297,6 +297,7 @@ for run in range(current_run + 1, RUNS + current_run + 1):
     # pop = pop[freq_filter]
     if len(pop) > 20000:
         # print("Too many sources, filtering further")
+        # Unused: peak frequency calculation
         # ### Source: https://iopscience.iop.org/article/10.3847/2515-5172/ac3d98/ampdf
         # coefficients = np.array([-1.01678, 5.57372, -4.9271, 1.68506])
         # eccentricities = pop.final_bpp.ecc.values
@@ -317,7 +318,7 @@ for run in range(current_run + 1, RUNS + current_run + 1):
         full_snr = sources.snr
         snr_filter = full_snr > 1
         pop = pop[snr_filter]
-        print(f"Filtered down to {len(pop)} sources with SNR > 1")
+        print(f"Filtered down to {len(pop)} sources with SNR > 1 within 1 pc")
         
 
     print("Evolving galaxy")
