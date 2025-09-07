@@ -1,10 +1,38 @@
-import cogsworth
+import time
+import os
+from copy import copy
+from multiprocessing import Pool
+import warnings
 import numpy as np
-import pandas as pd
 import astropy.units as u
-from schwimmbad import MultiPool
-
+import astropy.coordinates as coords
 import h5py as h5
+import pandas as pd
+from tqdm import tqdm
+import yaml
+import logging
+import matplotlib.pyplot as plt
+
+from cosmic.sample.initialbinarytable import InitialBinaryTable
+from cosmic.evolve import Evolve
+from cosmic.checkstate import set_checkstates
+from cosmic.utils import parse_inifile
+import gala.potential as gp
+import gala.dynamics as gd
+from gala.potential.potential.io import to_dict as potential_to_dict, from_dict as potential_from_dict
+
+from cogsworth import sfh
+from cogsworth.kicks import integrate_orbit_with_events
+from cogsworth.events import identify_events
+from cogsworth.classify import determine_final_classes
+from cogsworth.observables import get_photometry
+from cogsworth.tests.optional_deps import check_dependencies
+from cogsworth.plot import plot_cartoon_evolution, plot_galactic_orbit
+from cogsworth.utils import translate_COSMIC_tables
+
+from cogsworth.citations import CITATIONS
+
+__all__ = ["Population", "EvolvedPopulation", "load", "concat"]
 
 
 class StroopPop(cogsworth.pop.Population):
@@ -52,7 +80,7 @@ class StroopPop(cogsworth.pop.Population):
 
         # update the metallicity and birth times of the binaries to match the galaxy
         # self._initial_binaries["metallicity"] = self._initial_galaxy.Z
-        self._initial_binaries["tphysf"] = self._initial_galaxy.tau.to(u.Myr).value
+        self._initial_binaries.loc[:, "tphysf"] = self._initial_galaxy.tau.to(u.Myr).value
 
     def sample_initial_galaxy(self):
         """
@@ -283,3 +311,106 @@ class StroopPop(cogsworth.pop.Population):
             if self._final_vel is not None:
                 new_pop._final_vel = self._final_vel[all_inds]
         return new_pop
+    
+    def perform_stellar_evolution(self):
+        """Perform the (binary) stellar evolution of the sampled binaries"""
+        # delete any cached variables
+        self._final_bpp = None
+        self._observables = None
+        self._bin_nums = None
+        self._disrupted = None
+        self._escaped = None
+
+        if self.bcm_timestep_conditions != []:
+            set_checkstates(self.bcm_timestep_conditions)
+
+        # if no initial binaries have been sampled then we need to create some
+        if self._initial_binaries is None and self._initC is None:
+            logging.getLogger("cogsworth").warning(("cogsworth warning: Initial binaries not yet sampled, "
+                                                    "performing sampling now."))
+            self.sample_initial_binaries()
+
+        no_pool_existed = self.pool is None and self.processes > 1
+        if no_pool_existed:
+            self.pool = Pool(self.processes)
+
+        # catch any warnings about overwrites
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*initial binary table is being overwritten.*")
+            warnings.filterwarnings("ignore", message=".*to a different value than assumed in the mlwind.*")
+
+            ibt = self.initial_binaries if self._initC is None else self._initC
+
+            # perform the evolution!
+            self._bpp, bcm, self._initC, \
+                self._kick_info = Evolve.evolve(initialbinarytable=ibt,
+                                                BSEDict=self.BSE_settings, pool=self.pool,
+                                                timestep_conditions=self.bcm_timestep_conditions,
+                                                bpp_columns=self.bpp_columns, bcm_columns=self.bcm_columns)
+            
+            # insert old bin_nums into initC, bpp, bcm, kick_info
+            self._initC.loc[:,"old_bin_num"] = self._initial_binaries["bin_num"].values
+            # map old bin nums to new bin nums
+            new_to_old = dict(zip(self._initC["bin_num"], self._initial_binaries["bin_num"]))
+
+            self._bpp.loc[:, "old_bin_num"] = self._bpp["bin_num"].map(new_to_old)
+            self._kick_info.loc[:, "old_bin_num"] = self._kick_info["bin_num"].map(new_to_old)
+            if bcm is not None:
+                bcm.loc[:, "old_bin_num"] = bcm["bin_num"].map(new_to_old)
+
+
+
+            # only save BCM when it has interesting timesteps
+            if self.bcm_timestep_conditions != []:
+                self._bcm = bcm
+
+        if no_pool_existed:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
+
+        # check if there are any NaNs in the final bpp table rows or the kick_info
+        nans = np.isnan(self.final_bpp["sep"])
+        kick_info_nans = np.isnan(self._kick_info["delta_vsysx_1"])
+
+        # if we detect NaNs
+        if nans.any() or kick_info_nans.any():      # pragma: no cover
+            # make sure the user knows bad things have happened
+            logging.getLogger("cogsworth").warning("NaNs detected in COSMIC evolution")
+
+            # store the bad things for later
+            nan_bin_nums = np.unique(np.concatenate((self.final_bpp[nans]["bin_num"].values,
+                                                     self._kick_info[kick_info_nans]["bin_num"].values)))
+            self._bpp[self._bpp["bin_num"].isin(nan_bin_nums)].to_hdf("nans.h5", key="bpp")
+            self._initC[self._initC["bin_num"].isin(nan_bin_nums)].to_hdf("nans.h5", key="initC")
+            self._kick_info[self._kick_info["bin_num"].isin(nan_bin_nums)].to_hdf("nans.h5", key="kick_info")
+
+            # update the population to delete any bad binaries
+            n_nan = len(nan_bin_nums)
+            self.n_binaries_match -= n_nan
+            self._bpp = self._bpp[~self._bpp["bin_num"].isin(nan_bin_nums)]
+
+            if self._bcm is not None:
+                self._bcm = self._bcm[~self._bcm["bin_num"].isin(nan_bin_nums)]
+            self._kick_info = self._kick_info[~self._kick_info["bin_num"].isin(nan_bin_nums)]
+            self._initC = self._initC[~self._initC["bin_num"].isin(nan_bin_nums)]
+
+            not_nan = ~self.final_bpp["bin_num"].isin(nan_bin_nums)
+            self._initial_galaxy._tau = self._initial_galaxy._tau[not_nan]
+            self._initial_galaxy._Z = self._initial_galaxy._Z[not_nan]
+            self._initial_galaxy._x = self._initial_galaxy._x[not_nan]
+            self._initial_galaxy._y = self._initial_galaxy._y[not_nan]
+            self._initial_galaxy._z = self._initial_galaxy._z[not_nan]
+
+            for attr in ["v_R", "v_T", "v_z", "_which_comp"]:
+                if hasattr(self._initial_galaxy, attr):
+                    setattr(self._initial_galaxy, attr, getattr(self._initial_galaxy, attr)[not_nan])
+            self._initial_galaxy._size -= n_nan
+
+            # reset final bpp
+            self._final_bpp = None
+
+            logging.getLogger("cogsworth").warning((f"{n_nan} bad binaries removed from tables - but "
+                                                    "normalisation may be off. I've added the offending "
+                                                    "binaries to a `nan.h5` file with their initC, bpp, "
+                                                    "and kick_info tables"))
