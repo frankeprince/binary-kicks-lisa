@@ -21,6 +21,7 @@ import gala.potential as gp
 import gala.dynamics as gd
 from gala.potential.potential.io import to_dict as potential_to_dict, from_dict as potential_from_dict
 
+import cogsworth
 from cogsworth import sfh
 from cogsworth.kicks import integrate_orbit_with_events
 from cogsworth.events import identify_events
@@ -31,6 +32,8 @@ from cogsworth.plot import plot_cartoon_evolution, plot_galactic_orbit
 from cogsworth.utils import translate_COSMIC_tables
 
 from cogsworth.citations import CITATIONS
+
+from schwimmbad import MultiPool
 
 __all__ = ["Population", "EvolvedPopulation", "load", "concat"]
 
