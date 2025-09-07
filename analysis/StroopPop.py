@@ -45,8 +45,8 @@ class StroopPop(cogsworth.pop.Population):
         self._initial_binaries.reset_index(drop=True, inplace=True)
         
         # temp fix: Reset bin_nums, store old bin_nums in new column
-        self._initial_binaries["old_bin_num"] = self._initial_binaries["bin_num"]
-        self._initial_binaries["bin_num"] = np.arange(self.n_binaries_match)
+        self._initial_binaries.loc[:, "old_bin_num"] = self._initial_binaries["bin_num"]
+        self._initial_binaries.loc[:, "bin_num"] = np.arange(self.n_binaries_match)
 
         self.sample_initial_galaxy()
 
