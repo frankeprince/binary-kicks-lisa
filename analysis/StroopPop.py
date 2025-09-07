@@ -35,7 +35,7 @@ class StroopPop(cogsworth.pop.Population):
 #             n=self.n_binaries_match,
 #             weights=self.stroop_sample["MW_weights"].values * self.stroop_sample["mixture_weight"].values,
 #             replace=True)
-        self._initial_binaries = self.stroop_sample
+        self._initial_binaries = self.stroop_sample.copy()
 
         # sort by metallicity
         order = np.argsort(self._initial_binaries.metallicity.values)
