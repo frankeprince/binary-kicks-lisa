@@ -39,8 +39,8 @@ __all__ = ["Population", "EvolvedPopulation", "load", "concat"]
 
 
 class StroopPop(cogsworth.pop.Population):
-    def __init__(self, stroop_sample, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, stroop_sample, n_binaries, *args, **kwargs):
+        super().__init__(n_binaries, *args, **kwargs)
         self.stroop_sample = stroop_sample
         
     def sample_initial_binaries(self):
@@ -69,8 +69,9 @@ class StroopPop(cogsworth.pop.Population):
         self._initial_binaries = self.stroop_sample.copy()
 
         # sort by metallicity
-        order = np.argsort(self._initial_binaries.metallicity.values)
-        self._initial_binaries = self._initial_binaries.iloc[order]
+        # order = np.argsort(self._initial_binaries.metallicity.values)
+        # self._initial_binaries = self._initial_binaries.iloc[order]
+        self._initial_binaries.sort_values(by='metallicity', inplace=True)
 
         # reset index
         self._initial_binaries.reset_index(drop=True, inplace=True)
@@ -352,9 +353,9 @@ class StroopPop(cogsworth.pop.Population):
                                                 bpp_columns=self.bpp_columns, bcm_columns=self.bcm_columns)
             
             # insert old bin_nums into initC, bpp, bcm, kick_info
-            self._initC.loc[:,"old_bin_num"] = self._initial_binaries["bin_num"].values
+            self._initC.loc[:,"old_bin_num"] = self._initial_binaries["old_bin_num"].values
             # map old bin nums to new bin nums
-            new_to_old = dict(zip(self._initC["bin_num"], self._initial_binaries["bin_num"]))
+            new_to_old = dict(zip(self._initC["bin_num"], self._initial_binaries["old_bin_num"]))
 
             self._bpp.loc[:, "old_bin_num"] = self._bpp["bin_num"].map(new_to_old)
             self._kick_info.loc[:, "old_bin_num"] = self._kick_info["bin_num"].map(new_to_old)
