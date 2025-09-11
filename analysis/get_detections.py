@@ -257,8 +257,8 @@ for run in range(current_run + 1, RUNS + current_run + 1):
     full_weights_sum = (weights * metallicity_weights).sum()
     print(f"Running {btype} run {run} of {RUNS}")
     # Load the population
-    pop = StroopPop(n_binaries=len(rand_sample), processes=CORES, BSE_settings={},
-            stroop_sample=rand_sample, store_entire_orbits=False)
+    pop = StroopPop(rand_sample, len(rand_sample), processes=CORES, BSE_settings={},
+             store_entire_orbits=False)
     
     pop.BSE_settings = {}
 
@@ -286,39 +286,44 @@ for run in range(current_run + 1, RUNS + current_run + 1):
     dco_mask = (pop.bpp["sep"] > 0.0) & full_pairs_mask
     interesting_systems_table = pop.bpp.loc[dco_mask].drop_duplicates(subset = 'bin_num', keep = 'first')
     bin_num_mask = pop.final_bpp.bin_num.isin(interesting_systems_table.bin_num.values)
-    dco_weights_sum = np.sum(pop.final_bpp.loc[bin_num_mask].mixture_weight.values)
-    print("DCOs formed: ", len(interesting_systems_table))
+    dco_weights_sum = np.sum(pop.final_bpp.mixture_weight.values)
+    print(f"{BTYPE}s formed: ", len(interesting_systems_table))
     print("bpp length: ", len(pop.bpp))
-    print("Number of binaries that don't fit pairs: ", len(pop.final_bpp[~pairs_mask]))
+    print("Number of final binaries that don't fit pairs: ", len(pop.final_bpp[~pairs_mask]))
+
     print(f"Time taken to evolve binaries: {time.time() - evol_start:.2f} seconds")
     # throw out binaries that merged or disrupted
     pop = pop[sources_mask & pairs_mask]
+
+    GWmask = (2/(pop.final_bpp.porb.values * u.day).to(u.s)) > (1e-6*u.Hz)
+
+    pop = pop[GWmask]
     # freq_filter = (1/(pop.final_bpp.porb.values * u.day)).to(u.Hz) > (1e-6*u.Hz)
     # pop = pop[freq_filter]
-    if len(pop) > 20000:
-        # print("Too many sources, filtering further")
-        # Unused: peak frequency calculation
-        # ### Source: https://iopscience.iop.org/article/10.3847/2515-5172/ac3d98/ampdf
-        # coefficients = np.array([-1.01678, 5.57372, -4.9271, 1.68506])
-        # eccentricities = pop.final_bpp.ecc.values
-        # frequencies = (1/(pop.final_bpp.porb.values * u.day)).to(u.Hz)
-        # harmonic_array = np.ones((len(pop), 4))
-        # harmonic_array[:, 0] = eccentricities
-        # harmonic_array[:, 1] = eccentricities**2
-        # harmonic_array[:, 2] = eccentricities**3
-        # harmonic_array[:, 3] = eccentricities**4
-        # harmonic_array = np.multiply(harmonic_array, coefficients)
-        # harmonic_sum = np.sum(harmonic_array, axis=1)
-        # peak_harmonics = 2 * (1 + harmonic_sum) * (1 - eccentricities**2)**(-3/2)
-        # peak_frequencies = frequencies * peak_harmonics
-        # freq_mask = peak_frequencies > (1e-4 * u.Hz)
-        # pop = pop[freq_mask]
-        sources = pop.to_legwork_sources(distances=0.1 * u.kpc * np.ones(len(pop)))
-        sources.get_snr(t_obs = 10 * u.yr)
-        full_snr = sources.snr
-        snr_filter = full_snr > 1
-        pop = pop[snr_filter]
-        print(f"Filtered down to {len(pop)} sources with SNR > 1 within 1 pc")
+    # if len(pop) > 20000:
+    #     # print("Too many sources, filtering further")
+    #     # Unused: peak frequency calculation
+    #     # ### Source: https://iopscience.iop.org/article/10.3847/2515-5172/ac3d98/ampdf
+    #     # coefficients = np.array([-1.01678, 5.57372, -4.9271, 1.68506])
+    #     # eccentricities = pop.final_bpp.ecc.values
+    #     # frequencies = (1/(pop.final_bpp.porb.values * u.day)).to(u.Hz)
+    #     # harmonic_array = np.ones((len(pop), 4))
+    #     # harmonic_array[:, 0] = eccentricities
+    #     # harmonic_array[:, 1] = eccentricities**2
+    #     # harmonic_array[:, 2] = eccentricities**3
+    #     # harmonic_array[:, 3] = eccentricities**4
+    #     # harmonic_array = np.multiply(harmonic_array, coefficients)
+    #     # harmonic_sum = np.sum(harmonic_array, axis=1)
+    #     # peak_harmonics = 2 * (1 + harmonic_sum) * (1 - eccentricities**2)**(-3/2)
+    #     # peak_frequencies = frequencies * peak_harmonics
+    #     # freq_mask = peak_frequencies > (1e-4 * u.Hz)
+    #     # pop = pop[freq_mask]
+    #     sources = pop.to_legwork_sources(distances=0.1 * u.kpc * np.ones(len(pop)))
+    #     sources.get_snr(t_obs = 10 * u.yr)
+    #     full_snr = sources.snr
+    #     snr_filter = full_snr > 1
+    #     pop = pop[snr_filter]
+    #     print(f"Filtered down to {len(pop)} sources with SNR > 1 within 1 pc")
         
 
     print("Evolving galaxy")
@@ -328,17 +333,27 @@ for run in range(current_run + 1, RUNS + current_run + 1):
     print(f"Time taken to evolve galaxy: {time.time() - galaxy_start:.2f} seconds")
 
     # Mask for > 10e-4 GW freq
-    GWmask = (2/(pop.final_bpp.porb.values * u.day).to(u.s)) > (1e-4*u.Hz)
-    var_list = ["mass_1", "mass_2", "porb", "ecc", "metallicity"]
-    long_pop = pop.final_bpp[GWmask][var_list].copy()
-    print("freq over 1e-4: ", len(long_pop))
-    long_x, long_y, long_z = pop.final_pos[GWmask].T.value
-    long_pop["x"] = long_x
-    long_pop["y"] = long_y
-    long_pop["z"] = long_z
-    long_pop["run"] = int(run)
-    long_pop["weights_sum"] = weights_sum
-    long_pop["dco_weights_sum"] = dco_weights_sum
+    
+    # var_list = ["mass_1", "mass_2", "porb", "ecc", "metallicity"]
+    # long_pop = pop.final_bpp[GWmask][var_list].copy()
+    # print("freq over 1e-4: ", len(long_pop))
+    # long_x, long_y, long_z = pop.final_pos[GWmask].T.value
+    # long_pop["x"] = long_x
+    # long_pop["y"] = long_y
+    # long_pop["z"] = long_z
+    # long_pop["run"] = int(run)
+    # long_pop["weights_sum"] = weights_sum
+    # long_pop["full_weights_sum"] = full_weights_sum # metallicity weights * stroop weights
+    # long_pop["dco_weights_sum"] = dco_weights_sum # probably redundant now
+
+    x, y, z = pop.final_pos.T.value
+    pop.final_bpp["x"] = x
+    pop.final_bpp["y"] = y
+    pop.final_bpp["z"] = z
+    pop.final_bpp["run"] = int(run)
+    pop.final_bpp["weights_sum"] = weights_sum
+    pop.final_bpp["full_weights_sum"] = full_weights_sum # metallicity weights * stroop weights
+    pop.final_bpp["dco_weights_sum"] = dco_weights_sum # probably redundant now
 
 
 
@@ -349,114 +364,171 @@ for run in range(current_run + 1, RUNS + current_run + 1):
 
     full_snr4 = sources4.snr
     full_snr10 = sources10.snr
-    snr10_mask = full_snr10 > 7
-    snr4_mask = full_snr4 > 7
+    # snr10_mask = full_snr10 > 7
+    # snr4_mask = full_snr4 > 7
 
-    if np.all(~snr10_mask):
-        print(f"No sources with SNR > 7 in run {run}. Skipping this run.")
-        continue
+    # if np.all(~snr10_mask):
+    #     print(f"No sources with SNR > 7 in run {run}. Skipping this run.")
+    #     continue
 
-    LISA_sources = pop[snr10_mask]
+    # LISA_sources = pop[snr10_mask]
 
-    LISA_copy = LISA_sources.copy()
+    # LISA_copy = LISA_sources.copy()
 
 # change to pull position from initial galaxy, t1=0, t2=tau
 
 
-    v_phi = (LISA_copy.initial_galaxy.v_T / LISA_copy.initial_galaxy.rho)
-    v_X = (LISA_copy.initial_galaxy.v_R * np.cos(LISA_copy.initial_galaxy.phi)
-               - LISA_copy.initial_galaxy.rho * np.sin(LISA_copy.initial_galaxy.phi) * v_phi)
-    v_Y = (LISA_copy.initial_galaxy.v_R * np.sin(LISA_copy.initial_galaxy.phi)
-               + LISA_copy.initial_galaxy.rho * np.cos(LISA_copy.initial_galaxy.phi) * v_phi)
+    # v_phi = (LISA_copy.initial_galaxy.v_T / LISA_copy.initial_galaxy.rho)
+    # v_X = (LISA_copy.initial_galaxy.v_R * np.cos(LISA_copy.initial_galaxy.phi)
+    #            - LISA_copy.initial_galaxy.rho * np.sin(LISA_copy.initial_galaxy.phi) * v_phi)
+    # v_Y = (LISA_copy.initial_galaxy.v_R * np.sin(LISA_copy.initial_galaxy.phi)
+    #            + LISA_copy.initial_galaxy.rho * np.cos(LISA_copy.initial_galaxy.phi) * v_phi)
 
-    w0s = gd.PhaseSpacePosition(pos=[a.to(u.kpc).value for a in [LISA_copy.initial_galaxy.x,
-                                                                     LISA_copy.initial_galaxy.y,
-                                                                     LISA_copy.initial_galaxy.z]] * u.kpc,
+    # w0s = gd.PhaseSpacePosition(pos=[a.to(u.kpc).value for a in [LISA_copy.initial_galaxy.x,
+    #                                                                  LISA_copy.initial_galaxy.y,
+    #                                                                  LISA_copy.initial_galaxy.z]] * u.kpc,
+    #                                 vel=[a.to(u.km/u.s).value for a in [v_X, v_Y,
+    #                                                                     LISA_copy.initial_galaxy.v_z]] * u.km/u.s)
+
+    # no_kick_orbits = [LISA_copy.galactic_potential.integrate_orbit(w0s[i],
+    #                                                    t1=0 * u.Myr,
+    #                                                    t2=LISA_copy.initial_galaxy.tau[i],
+    #                                                    dt=1 * u.Myr)
+    #               for i in range(len(LISA_copy))]
+
+    v_phi = (pop.initial_galaxy.v_T / pop.initial_galaxy.rho)
+    v_X = (pop.initial_galaxy.v_R * np.cos(pop.initial_galaxy.phi)
+              - pop.initial_galaxy.rho * np.sin(pop.initial_galaxy.phi) * v_phi)
+    v_Y = (pop.initial_galaxy.v_R * np.sin(pop.initial_galaxy.phi)
+                + pop.initial_galaxy.rho * np.cos(pop.initial_galaxy.phi) * v_phi)
+    
+    w0s = gd.PhaseSpacePosition(pos=[a.to(u.kpc).value for a in [pop.initial_galaxy.x,
+                                                                     pop.initial_galaxy.y,
+                                                                     pop.initial_galaxy.z]] * u.kpc,
                                     vel=[a.to(u.km/u.s).value for a in [v_X, v_Y,
-                                                                        LISA_copy.initial_galaxy.v_z]] * u.km/u.s)
-
-    no_kick_orbits = [LISA_copy.galactic_potential.integrate_orbit(w0s[i],
+                                                                        pop.initial_galaxy.v_z]] * u.km/u.s)
+    no_kick_orbits = [pop.galactic_potential.integrate_orbit(w0s[i],
                                                        t1=0 * u.Myr,
-                                                       t2=LISA_copy.initial_galaxy.tau[i],
+                                                       t2=pop.initial_galaxy.tau[i],
                                                        dt=1 * u.Myr)
-                  for i in range(len(LISA_copy))]
+                  for i in range(len(pop))]
+
     x_no_kick = [no_kick_orbits[i][-1].x.value for i in range(len(no_kick_orbits))]
     y_no_kick = [no_kick_orbits[i][-1].y.value for i in range(len(no_kick_orbits))]
     z_no_kick = [no_kick_orbits[i][-1].z.value for i in range(len(no_kick_orbits))]
 
-    snr10 = full_snr10[snr10_mask]
-    snr4 = full_snr4[snr10_mask]
+    # snr10 = full_snr10[snr10_mask]
+    # snr4 = full_snr4[snr10_mask]
     
-    pairs_mask = ((LISA_sources.bpp.kstar_1.isin(k1_select)) & (LISA_sources.bpp.kstar_2.isin(k2_select))) | \
-                 ((LISA_sources.bpp.kstar_1.isin(k2_select)) & (LISA_sources.bpp.kstar_2.isin(k1_select)))
+    # pairs_mask = ((LISA_sources.bpp.kstar_1.isin(k1_select)) & (LISA_sources.bpp.kstar_2.isin(k2_select))) | \
+    #              ((LISA_sources.bpp.kstar_1.isin(k2_select)) & (LISA_sources.bpp.kstar_2.isin(k1_select)))
     
     # add orbits
-    LISA_initC = pop.initC.loc[snr10_mask].copy()
-    LISA_bin_nums = LISA_initC.bin_num.values
-    LISA_formation = LISA_sources.bpp.loc[pairs_mask].drop_duplicates(subset='bin_num').copy()
-    # LISA_formation = LISA_formation.loc[LISA_formation.bin_num.isin(LISA_bin_nums)]
-    LISA_final = pop.final_bpp.loc[snr10_mask].copy()
-    LISA_kicks = pop.kick_info.loc[pop.kick_info.bin_num.isin(LISA_bin_nums)].copy()
+    # LISA_initC = pop.initC.loc[snr10_mask].copy()
+    # LISA_bin_nums = LISA_initC.bin_num.values
+    # LISA_formation = LISA_sources.bpp.loc[pairs_mask].drop_duplicates(subset='bin_num').copy()
+
+    # LISA_final = pop.final_bpp.loc[snr10_mask].copy()
+    # LISA_kicks = pop.kick_info.loc[pop.kick_info.bin_num.isin(LISA_bin_nums)].copy()
     # LISA_orbits = pop.orbits[snr10_mask]
 
-    initialx, initialy, initialz = pop.initial_galaxy.x[snr10_mask].value, pop.initial_galaxy.y[snr10_mask].value, pop.initial_galaxy.z[snr10_mask].value
-    finalx, finaly, finalz = pop.final_pos[snr10_mask].T.value
-    # initalvx, initalvy, initalvz = pop.initial_galaxy.v_x[snr7_mask], pop.initial_galaxy.v_y[snr7_mask], pop.initial_galaxy.v_z[snr7_mask]
-    finalvx, finalvy, finalvz = pop.final_vel[snr10_mask].T.value
+    # initialx, initialy, initialz = pop.initial_galaxy.x[snr10_mask].value, pop.initial_galaxy.y[snr10_mask].value, pop.initial_galaxy.z[snr10_mask].value
+    # finalx, finaly, finalz = pop.final_pos[snr10_mask].T.value
+    # # initalvx, initalvy, initalvz = pop.initial_galaxy.v_x[snr7_mask], pop.initial_galaxy.v_y[snr7_mask], pop.initial_galaxy.v_z[snr7_mask]
+    # finalvx, finalvy, finalvz = pop.final_vel[snr10_mask].T.value
 
-    component = pop.initial_galaxy.which_comp[snr10_mask]
+    initialx, initialy, initialz = pop.initial_galaxy.x.value, pop.initial_galaxy.y.value, pop.initial_galaxy.z.value
+    finalx, finaly, finalz = pop.final_pos.T.value
+    # initalvx, initalvy, initalvz = pop.initial_galaxy.v_x[snr7_mask], pop.initial_galaxy.v_y[snr7_mask], pop.initial_galaxy.v_z[snr7_mask]
+    finalvx, finalvy, finalvz = pop.final_vel.T.value
+
+    # component = pop.initial_galaxy.which_comp[snr10_mask]
+    component = pop.initial_galaxy.which_comp
+
     component_map = {
     'low_alpha_disc': 0,
     'high_alpha_disc': 1,
     'bulge': 2}   
     component = np.vectorize(component_map.get)(component)
 
-    LISA_initC["x"] = initialx
-    LISA_initC["y"] = initialy
-    LISA_initC["z"] = initialz
-    LISA_initC["component"] = component
+    # LISA_initC["x"] = initialx
+    # LISA_initC["y"] = initialy
+    # LISA_initC["z"] = initialz
+    # LISA_initC["component"] = component
 
-    LISA_final["x"] = finalx
-    LISA_final["y"] = finaly
-    LISA_final["z"] = finalz
-    LISA_final["x_no_kick"] = x_no_kick
-    LISA_final["y_no_kick"] = y_no_kick
-    LISA_final["z_no_kick"] = z_no_kick
-    LISA_final["v_x"] = finalvx
-    LISA_final["v_y"] = finalvy
-    LISA_final["v_z"] = finalvz
-    LISA_final["component"] = component
+    pop.initC["x"] = initialx
+    pop.initC["y"] = initialy
+    pop.initC["z"] = initialz
+    pop.initC["component"] = component
+    pop.initC["run"] = int(run)
+    pop.initC["weights_sum"] = weights_sum
+    pop.initC["full_weights_sum"] = full_weights_sum # metallicity weights * stroop weights
+    pop.initC["dco_weights_sum"] = dco_weights_sum # probably redundant now
 
-    LISA_initC["snr10"] = snr10
-    LISA_final["snr10"] = snr10
-    LISA_formation["snr10"] = snr10
-    LISA_initC["snr4"] = snr4
-    LISA_final["snr4"] = snr4
-    LISA_formation["snr4"] = snr4
+    # LISA_final["x"] = finalx
+    # LISA_final["y"] = finaly
+    # LISA_final["z"] = finalz
+    # LISA_final["x_no_kick"] = x_no_kick
+    # LISA_final["y_no_kick"] = y_no_kick
+    # LISA_final["z_no_kick"] = z_no_kick
+    # LISA_final["v_x"] = finalvx
+    # LISA_final["v_y"] = finalvy
+    # LISA_final["v_z"] = finalvz
+    # LISA_final["component"] = component
 
-    LISA_initC["run"], LISA_formation["run"], LISA_final["run"], LISA_kicks["run"] = run, run, run, run
-    LISA_initC["weights_sum"], LISA_formation["weights_sum"], LISA_final["weights_sum"], LISA_kicks["weights_sum"] = weights_sum, weights_sum, weights_sum, weights_sum
-    LISA_initC["dco_weights_sum"] = dco_weights_sum
-    LISA_formation["dco_weights_sum"] = dco_weights_sum
-    LISA_final["dco_weights_sum"] = dco_weights_sum
-    LISA_kicks["dco_weights_sum"] = dco_weights_sum
+    pop.final_bpp["x_no_kick"] = x_no_kick
+    pop.final_bpp["y_no_kick"] = y_no_kick
+    pop.final_bpp["z_no_kick"] = z_no_kick
+    pop.final_bpp["v_x"] = finalvx
+    pop.final_bpp["v_y"] = finalvy
+    pop.final_bpp["v_z"] = finalvz
+    pop.final_bpp["component"] = component
 
-    LISA_formation["stroop_bin_num"] = LISA_initC.stroop_bin_num.values
-    LISA_final["stroop_bin_num"] = LISA_initC.stroop_bin_num.values
-    LISA_kicks["stroop_bin_num"] = np.repeat(LISA_initC.stroop_bin_num.values, 2)
+    # LISA_initC["snr10"] = snr10
+    # LISA_final["snr10"] = snr10
+    # LISA_formation["snr10"] = snr10
+    # LISA_initC["snr4"] = snr4
+    # LISA_final["snr4"] = snr4
+    # LISA_formation["snr4"] = snr4
+    pop.initC["snr10"] = full_snr10
+    pop.final_bpp["snr10"] = full_snr10
+    pop.initC["snr4"] = full_snr4
+    pop.final_bpp["snr4"] = full_snr4
+    
 
-    LISA_initC["lisa_bin_num"] = np.arange(len(LISA_initC))
-    LISA_formation["lisa_bin_num"] = np.arange(len(LISA_formation))
-    LISA_final["lisa_bin_num"] = np.arange(len(LISA_final))
-    LISA_kicks["lisa_bin_num"] = np.repeat(np.arange(len(LISA_initC)), 2)
-    long_pop["lisa_bin_num"] = np.arange(len(long_pop))
+    # LISA_initC["run"], LISA_formation["run"], LISA_final["run"], LISA_kicks["run"] = run, run, run, run
+    # LISA_initC["weights_sum"], LISA_formation["weights_sum"], LISA_final["weights_sum"], LISA_kicks["weights_sum"] = weights_sum, weights_sum, weights_sum, weights_sum
+
+    # metallicity weights * stroop weights
+    # LISA_initC["full_weights_sum"], LISA_formation["full_weights_sum"], LISA_final["full_weights_sum"], LISA_kicks["full_weights_sum"] = full_weights_sum, full_weights_sum, full_weights_sum, full_weights_sum
+    
+    # probably redundant now:
+    # LISA_initC["dco_weights_sum"] = dco_weights_sum
+    # LISA_formation["dco_weights_sum"] = dco_weights_sum
+    # LISA_final["dco_weights_sum"] = dco_weights_sum
+    # LISA_kicks["dco_weights_sum"] = dco_weights_sum
+
+    # old bin nums should now be saved automatically by class
+    # LISA_formation["stroop_bin_num"] = LISA_initC.stroop_bin_num.values
+    # LISA_final["stroop_bin_num"] = LISA_initC.stroop_bin_num.values
+    # LISA_kicks["stroop_bin_num"] = np.repeat(LISA_initC.stroop_bin_num.values, 2)
+
+    # LISA_initC["lisa_bin_num"] = np.arange(len(LISA_initC))
+    # LISA_formation["lisa_bin_num"] = np.arange(len(LISA_formation))
+    # LISA_final["lisa_bin_num"] = np.arange(len(LISA_final))
+    # LISA_kicks["lisa_bin_num"] = np.repeat(np.arange(len(LISA_initC)), 2)
+    # long_pop["lisa_bin_num"] = np.arange(len(long_pop))
+    pop.initC.loc[:, "bin_num"] = np.arange(len(pop.initC))
+    pop.final_bpp.loc[:, "bin_num"] = np.arange(len(pop.final_bpp))
 
     # reset indices/bin_nums
-    LISA_initC.reset_index(drop=True, inplace=True)
-    LISA_formation.reset_index(drop=True, inplace=True)
-    LISA_final.reset_index(drop=True, inplace=True)
-    LISA_kicks.reset_index(drop=True, inplace=True)
-    long_pop.reset_index(drop=True, inplace=True)
+    # LISA_initC.reset_index(drop=True, inplace=True)
+    # LISA_formation.reset_index(drop=True, inplace=True)
+    # LISA_final.reset_index(drop=True, inplace=True)
+    # LISA_kicks.reset_index(drop=True, inplace=True)
+    # long_pop.reset_index(drop=True, inplace=True)
+    pop.initC.reset_index(drop=True, inplace=True)
+    pop.final_bpp.reset_index(drop=True, inplace=True)
 
 
     if run > 1:
@@ -464,37 +536,46 @@ for run in range(current_run + 1, RUNS + current_run + 1):
         # adjust based on number in file already
         with pd.HDFStore(filepath, 'r') as store:
             existing_sources = store.get_storer('initC').nrows
-            high_freq_sources = store.get_storer('high_freq').nrows
+            # high_freq_sources = store.get_storer('high_freq').nrows
         # check orbits count   
         # with h5.File(filepath, 'r') as f:
         #     if 'orbits' in f:
         #         existing_orbits = f['orbits']['offsets'].shape[0] - 1
-        print(f"Existing sources in file: {existing_sources}, High freq sources: {high_freq_sources}")
+        # print(f"Existing sources in file: {existing_sources}, High freq sources: {high_freq_sources}")
+        print(f"Existing sources in file: {existing_sources}")
         # print(f"Existing orbits in file: {existing_orbits}")
 
 
-        LISA_initC.index += existing_sources
-        LISA_formation.index += existing_sources
-        LISA_final.index += existing_sources
-        LISA_kicks.index += existing_sources
-        long_pop.index += high_freq_sources
+        # LISA_initC.index += existing_sources
+        # LISA_formation.index += existing_sources
+        # LISA_final.index += existing_sources
+        # LISA_kicks.index += existing_sources
+        # long_pop.index += high_freq_sources
+        pop.initC.index += existing_sources
+        pop.final_bpp.index += existing_sources
 
-        LISA_initC["lisa_bin_num"] += existing_sources
-        LISA_formation["lisa_bin_num"] += existing_sources
-        LISA_final["lisa_bin_num"] += existing_sources
-        LISA_kicks["lisa_bin_num"] += existing_sources
-        long_pop["lisa_bin_num"] += high_freq_sources
+
+
+        # LISA_initC["lisa_bin_num"] += existing_sources
+        # LISA_formation["lisa_bin_num"] += existing_sources
+        # LISA_final["lisa_bin_num"] += existing_sources
+        # LISA_kicks["lisa_bin_num"] += existing_sources
+        # long_pop["lisa_bin_num"] += high_freq_sources
+        pop.initC["bin_num"] += existing_sources
+        pop.final_bpp["bin_num"] += existing_sources
 
     # Save the run number in the file attributes
     with h5.File(filepath, 'a') as f:
         f.attrs["run_number"] = run
 
     # save data
-    long_pop.to_hdf(filepath, key='high_freq', mode='a', format='table', append=True)
-    LISA_initC.to_hdf(filepath, key='initC', mode='a', format='table', append=True)
-    LISA_formation.to_hdf(filepath, key='formation', mode='a', format='table', append=True)
-    LISA_final.to_hdf(filepath, key='final', mode='a', format='table', append=True)
-    LISA_kicks.to_hdf(filepath, key='kicks', mode='a', format='table', append=True)
+    # long_pop.to_hdf(filepath, key='high_freq', mode='a', format='table', append=True)
+    # LISA_initC.to_hdf(filepath, key='initC', mode='a', format='table', append=True)
+    # LISA_formation.to_hdf(filepath, key='formation', mode='a', format='table', append=True)
+    # LISA_final.to_hdf(filepath, key='final', mode='a', format='table', append=True)
+    # LISA_kicks.to_hdf(filepath, key='kicks', mode='a', format='table', append=True)
+    pop.initC.to_hdf(filepath, key='initC', mode='a', format='table', append=True)
+    pop.final_bpp.to_hdf(filepath, key='final_bpp', mode='a', format='table', append=True)
 
     # save orbits
     # append_orbits_to_file(filepath, LISA_orbits)
@@ -503,7 +584,7 @@ for run in range(current_run + 1, RUNS + current_run + 1):
     # print(orbits)
     # print(LISA_orbits.shape)
 
-    print(f"Number of sources with SNR > 7: {len(LISA_sources)}")
+    # print(f"Number of sources with SNR > 7: {len(LISA_sources)}")
     print(f"Saving sources to file for {btype} run {run+1}")
     print(f"Time taken for run {run}: {time.time() - time_start:.2f} seconds")
 
