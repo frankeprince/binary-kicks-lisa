@@ -80,6 +80,7 @@ class StroopPop(cogsworth.pop.Population):
         self._initial_binaries.loc[:, "old_bin_num"] = self._initial_binaries["bin_num"]
         self._initial_binaries.loc[:, "bin_num"] = np.arange(self.n_binaries_match)
 
+        print("sampling galaxy")
         self.sample_initial_galaxy()
 
         # update the metallicity and birth times of the binaries to match the galaxy
@@ -90,54 +91,128 @@ class StroopPop(cogsworth.pop.Population):
         """
         Sample a galaxy to roughly match metallicity of binaries.
         """
-        self._initial_galaxy = self.sfh_model(size=0, **self.sfh_params)
 
         # Get bins, counts, from initial binaries
-        maxZ = np.max(self._initial_binaries.metallicity.values) * 1.01
-        minZ = np.min(self._initial_binaries.metallicity.values) * 0.99
+        # maxZ = np.max(self._initial_binaries.metallicity.values) * 1.01
+        # minZ = np.min(self._initial_binaries.metallicity.values) * 0.99
+        maxZ = 0.03
+        minZ = 1e-4
         grid = np.linspace(np.log10(minZ), np.log10(maxZ), 50)
         inner_bins = np.array([grid[i] + (grid[i+1] - grid[i]) / 2 for i in range(len(grid) - 1)])
         self.bins = 10**np.hstack((grid[0], inner_bins, grid[-1]))
         self.bin_centers = 10**np.array([(self.bins[i] + self.bins[i+1])/2 for i in range(len(self.bins) - 1)])
 
         counts, _ = np.histogram(self._initial_binaries.metallicity.values, bins=self.bins)
-        
-        divided_counts = np.floor_divide(counts, self.processes * np.ones(50, dtype=int))
-        remainder_counts = counts - divided_counts * self.processes
-        counts_list = [divided_counts.copy() for _ in range(self.processes)]
-        counts_list[0] += remainder_counts  # Add the remainder to the first process
 
-        with MultiPool() as pool:
-            galaxies = list(pool.map(self.fill_galaxy_bins, counts_list))
-        print(galaxies)
+        # split counts array
+        low_counts = counts.copy()
+        low_counts[30:] = 0
+
+        high_counts = counts.copy()
+        high_counts[:30] = 0
         
-        # Concatenate galaxies from all processes
-        self._initial_galaxy = cogsworth.sfh.concat(*galaxies)
+        # # MULTIPROCESSING
+        # divided_low_counts = np.floor_divide(low_counts, self.processes * np.ones(50, dtype=int))
+        # remainder_low_counts = low_counts - divided_low_counts * self.processes
+        # low_counts_list = [divided_low_counts.copy() for _ in range(self.processes)]
+        # low_counts_list[0] += remainder_low_counts  # Add the remainder to the first process
+
+        # divided_high_counts = np.floor_divide(high_counts, self.processes * np.ones(50, dtype=int))
+        # remainder_high_counts = high_counts - divided_high_counts * self.processes
+        # high_counts_list = [divided_high_counts.copy() for _ in range(self.processes)]
+        # high_counts_list[0] += remainder_high_counts  # Add the remainder to the first process
+
+
+        # print("filling low metallicities")
+        # fill_start = time.time()
+        # with MultiPool() as pool:
+        #     low_galaxies = list(pool.map(self.fill_low_galaxy_bins, low_counts_list))
+        # print(low_galaxies)
+        # print(f"Filled low in {time.time() - fill_start} seconds")
+
+        # print("filling high metallicities")
+        # with MultiPool() as pool:
+        #     high_galaxies = list(pool.map(self.fill_high_galaxy_bins, high_counts_list))
+        # print(high_galaxies)
+        # print(f"Filled high in {time.time() - fill_start} seconds")
         
+        # # Concatenate galaxies from all processes
+        # self._initial_galaxy = cogsworth.sfh.concat(*low_galaxies, *high_galaxies)
+
         # Initialize galaxy counts ### No Multiprocessing
-#         galaxy_counts = np.zeros_like(counts)
-#         while np.sum(galaxy_counts) < np.sum(counts):
-#             # print(self._initial_galaxy)
-#             # sample galaxy locations
+        low_galaxy_counts = np.zeros_like(counts)
+        fill_start = time.time()
+        galaxy = None
 
-#             g = self.sfh_model(size=100_000_000, **self.sfh_params)
+        # fill low metallicity bins
+        while np.sum(low_galaxy_counts) < np.sum(low_counts):
+            # print(self._initial_galaxy)
+            # sample galaxy locations
+            print(low_counts - low_galaxy_counts)
 
-#             for i in range(len(counts)):
-#                 if galaxy_counts[i] == counts[i]:
-#                     continue
-#                 i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
-#                 if (galaxy_counts[i] + len(i_locations) > counts[i]):
-#                     random_inds = np.random.choice(len(i_locations), size=counts[i]-galaxy_counts[i], replace=False)
-# #                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, 
-# #                                                                 i_locations[:int(counts[i] - galaxy_counts[i])])
-#                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, 
-#                                                                 i_locations[random_inds])
-#                     galaxy_counts[i] += counts[i] - galaxy_counts[i]
-#                 else:
-#                     galaxy_counts[i] += len(i_locations)
-#                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, i_locations)
+            g = MWStroop(size=1_000_000, phi_cut=3.5, **self.sfh_params)
+
+            # adjust metallicity into cosmic bounds
+            g.Z[g.Z < 1e-4] = 1e-4
+            g.Z[g.Z > 0.03] = 0.03
+            for i in range(len(low_counts)):
+                if low_galaxy_counts[i] == low_counts[i]:
+                    continue
+
+                i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+                if len(i_locations) == 0:
+                    continue  # nothing to add this round
+
+                if (low_galaxy_counts[i] + len(i_locations) > low_counts[i]):
+                    n_to_add = low_counts[i] - low_galaxy_counts[i]
+                    random_inds = np.random.choice(len(i_locations), size=n_to_add, replace=False)
+                    i_locations = i_locations[random_inds]
+
+                # Concatenate safely
+                if galaxy is None:
+                    galaxy = i_locations
+                else:
+                    galaxy = cogsworth.sfh.concat(galaxy, i_locations)
+
+                low_galaxy_counts[i] = min(low_counts[i], low_galaxy_counts[i] + len(i_locations))
+        print(f"Filled low galaxy in {time.time() - fill_start} seconds")
+        # fill high metallicity bins
+        high_galaxy_counts = np.zeros_like(high_counts)
+        fill_start = time.time()
+        while np.sum(high_galaxy_counts) < np.sum(high_counts):
+            # print(self._initial_galaxy)
+            # sample galaxy locations
+            print(high_counts - high_galaxy_counts)
+            g = self.sfh_model(size=100_000, **self.sfh_params)
+
+            # adjust metallicity into cosmic bounds
+            g.Z[g.Z < 1e-4] = 1e-4
+            g.Z[g.Z > 0.03] = 0.03
+            for i in range(len(high_counts)):
+                if high_galaxy_counts[i] == high_counts[i]:
+                    continue
+
+                i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+                if len(i_locations) == 0:
+                    continue  # nothing to add this round
+
+                if (high_galaxy_counts[i] + len(i_locations) > high_counts[i]):
+                    n_to_add = high_counts[i] - high_galaxy_counts[i]
+                    random_inds = np.random.choice(len(i_locations), size=n_to_add, replace=False)
+                    i_locations = i_locations[random_inds]
+
+                # Concatenate safely
+                if galaxy is None:
+                    galaxy = i_locations
+                else:
+                    galaxy = cogsworth.sfh.concat(galaxy, i_locations)
+
+                high_galaxy_counts[i] = min(high_counts[i], high_galaxy_counts[i] + len(i_locations))
+        print(f"Filled high galaxy in {time.time() - fill_start} seconds")
+        self._initial_galaxy = galaxy
+
         # sort by metallicity
-        # print(self._initial_galaxy)
+        print(self._initial_galaxy)
         order = np.argsort(self._initial_galaxy.Z.value)
         self._initial_galaxy = self._initial_galaxy[order]
 
@@ -165,34 +240,131 @@ class StroopPop(cogsworth.pop.Population):
         self._initial_galaxy.v_T = v_T
         self._initial_galaxy.v_z = v_z
 
-    def fill_galaxy_bins(self, counts):
+    def fill_high_galaxy_bins(self, counts):
         galaxy_counts = np.zeros_like(counts)
-        galaxy = self.sfh_model(size=0, **self.sfh_params)
+        galaxy = None
+        # galaxy = self.sfh_model(size=0, **self.sfh_params)
         while np.sum(galaxy_counts) < np.sum(counts):
             # print(self._initial_galaxy)
             # sample galaxy locations
+            # print(counts - galaxy_counts)
 
-            g = self.sfh_model(size=100_000, **self.sfh_params)
+            g = self.sfh_model(size=10_000, **self.sfh_params)
 
             # adjust metallicity into cosmic bounds
             g.Z[g.Z < 1e-4] = 1e-4
             g.Z[g.Z > 0.03] = 0.03
 
+#             for i in range(len(counts)):
+#                 if galaxy_counts[i] == counts[i]:
+#                     continue
+
+#                 i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+
+#                 if len(i_locations) == 0:
+#                     continue
+
+#                 if (galaxy_counts[i] + len(i_locations) > counts[i]):
+#                     random_inds = np.random.choice(len(i_locations), size=counts[i]-galaxy_counts[i], replace=False)
+# #                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, 
+# #                                                                 i_locations[:int(counts[i] - galaxy_counts[i])])
+#                     if np.all(galaxy_counts == 0):
+#                         galaxy = i_locations[random_inds]
+#                     else:
+#                         galaxy = cogsworth.sfh.concat(galaxy, i_locations[random_inds])
+#                     galaxy_counts[i] += counts[i] - galaxy_counts[i]
+#                 else:
+#                     galaxy_counts[i] += len(i_locations)
+#                     if np.all(galaxy_counts == 0):
+#                         galaxy = i_locations
+#                     else:
+#                         galaxy = cogsworth.sfh.concat(galaxy, i_locations)
             for i in range(len(counts)):
                 if galaxy_counts[i] == counts[i]:
                     continue
+
                 i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+                if len(i_locations) == 0:
+                    continue  # nothing to add this round
+
                 if (galaxy_counts[i] + len(i_locations) > counts[i]):
-                    random_inds = np.random.choice(len(i_locations), size=counts[i]-galaxy_counts[i], replace=False)
-#                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, 
-#                                                                 i_locations[:int(counts[i] - galaxy_counts[i])])
-                    galaxy = cogsworth.sfh.concat(galaxy, 
-                                                                i_locations[random_inds])
-                    galaxy_counts[i] += counts[i] - galaxy_counts[i]
+                    n_to_add = counts[i] - galaxy_counts[i]
+                    random_inds = np.random.choice(len(i_locations), size=n_to_add, replace=False)
+                    i_locations = i_locations[random_inds]
+
+                # Concatenate safely
+                if galaxy is None:
+                    galaxy = i_locations
                 else:
-                    galaxy_counts[i] += len(i_locations)
                     galaxy = cogsworth.sfh.concat(galaxy, i_locations)
+
+                galaxy_counts[i] = min(counts[i], galaxy_counts[i] + len(i_locations))
+
         return galaxy
+
+    def fill_low_galaxy_bins(self, counts):
+            galaxy_counts = np.zeros_like(counts)
+            galaxy = None
+            # galaxy = self.sfh_model(size=0, **self.sfh_params)
+            while np.sum(galaxy_counts) < np.sum(counts):
+                # print(self._initial_galaxy)
+                # sample galaxy locations
+                print(counts - galaxy_counts)
+
+                print("sampling low Z")
+                g = MWStroop(size=10_000, phi_cut=4, **self.sfh_params)
+                print("sampled low Z")
+
+                # adjust metallicity into cosmic bounds
+                g.Z[g.Z < 1e-4] = 1e-4
+                g.Z[g.Z > 0.03] = 0.03
+
+    #             for i in range(len(counts)):
+    #                 if galaxy_counts[i] == counts[i]:
+    #                     continue
+
+    #                 i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+
+    #                 if len(i_locations) == 0:
+    #                     continue
+
+    #                 if (galaxy_counts[i] + len(i_locations) > counts[i]):
+    #                     random_inds = np.random.choice(len(i_locations), size=counts[i]-galaxy_counts[i], replace=False)
+    # #                     self._initial_galaxy = cogsworth.sfh.concat(self._initial_galaxy, 
+    # #                                                                 i_locations[:int(counts[i] - galaxy_counts[i])])
+    #                     if np.all(galaxy_counts == 0):
+    #                         galaxy = i_locations[random_inds]
+    #                     else:
+    #                         galaxy = cogsworth.sfh.concat(galaxy, i_locations[random_inds])
+    #                     galaxy_counts[i] += counts[i] - galaxy_counts[i]
+    #                 else:
+    #                     galaxy_counts[i] += len(i_locations)
+    #                     if np.all(galaxy_counts == 0):
+    #                         galaxy = i_locations
+    #                     else:
+    #                         galaxy = cogsworth.sfh.concat(galaxy, i_locations)
+                for i in range(len(counts)):
+                    if galaxy_counts[i] == counts[i]:
+                        continue
+
+                    i_locations = g[(self.bins[i] <= g.Z.value) & (g.Z.value < self.bins[i+1])]
+                    if len(i_locations) == 0:
+                        continue  # nothing to add this round
+
+                    if (galaxy_counts[i] + len(i_locations) > counts[i]):
+                        n_to_add = counts[i] - galaxy_counts[i]
+                        random_inds = np.random.choice(len(i_locations), size=n_to_add, replace=False)
+                        i_locations = i_locations[random_inds]
+
+                    # Concatenate safely
+                    if galaxy is None:
+                        galaxy = i_locations
+                    else:
+                        galaxy = cogsworth.sfh.concat(galaxy, i_locations)
+
+                    galaxy_counts[i] = min(counts[i], galaxy_counts[i] + len(i_locations))
+
+            return galaxy
 
     def __getitem__(self, ind):
         # convert any Pandas Series to numpy arrays
@@ -418,3 +590,80 @@ class StroopPop(cogsworth.pop.Population):
                                                     "normalisation may be off. I've added the offending "
                                                     "binaries to a `nan.h5` file with their initC, bpp, "
                                                     "and kick_info tables"))
+
+
+class MWStroop(cogsworth.sfh.SandersBinney2015):
+    def __init__(self, phi_cut, *args, **kwargs):
+        self.phi_cut = phi_cut
+        super().__init__(*args, **kwargs)
+        
+
+    def _generate_df(self, J, component, tau):
+        """Generate a distribution function for a given component and lookback time
+
+        Follows `Sanders & Binney 2015 <https://ui.adsabs.harvard.edu/abs/2015MNRAS.449.3479S/abstract>`_
+        Eq. 3.1.
+
+        Parameters
+        ----------
+        J : `array-like`, shape (N, 3)
+            Actions in (J_r, J_phi, J_z) in units of kpc^2 / Myr
+        component : `str`
+            Either "thin_disc" or "thick_disc"
+        tau : :class:`~astropy.units.Quantity` [time]
+            Lookback time
+
+        Returns
+        -------
+        df_val : `array-like`, shape (N,)
+            Value of the distribution function at the given actions
+        """
+        assert component in ["thin_disc", "thick_disc"], "Component must be 'thin_disc' or 'thick_disc'"
+
+        J_r, J_z, J_phi = J.T
+
+        # only compute the DF where the prior interpolations are valid
+        df_val = np.full_like(J_r, np.nan)
+        valid = (J_phi >= 1e-5) & (J_phi <= 100)
+
+        R_d = 3.45 if component == "thin_disc" else 2.31
+        L_0 = 0.01
+
+        # get guiding radii
+        R_g = np.zeros_like(J_r)
+        R_g[valid] = self._guiding_radius_interp(J_phi[valid])
+        valid &= (R_g >= 1e-2) & (R_g <= 100)
+        R_g = R_g[valid]
+
+        # get frequencies at guiding radii based on potential
+        omega = self._omega_interp(R_g)
+        kappa = self._kappa_interp(R_g)
+        nu = self._nu_interp(R_g)
+
+        # time dependent velocity dispersions
+        kms_to_kpcMyr = (u.km / u.s).to(u.kpc / u.Myr)
+        sigma_R = self._get_sigma_i("R", R_g, tau, component) * kms_to_kpcMyr
+        sigma_z = self._get_sigma_i("z", R_g, tau, component) * kms_to_kpcMyr
+
+        # construct DF
+        prefactor = 1 / (8 * np.pi**3) * (1 + np.tanh(J_phi[valid] / L_0))          # no units
+        exp_terms = [
+            omega / (R_d**2 * kappa**2) * np.exp(-R_g / R_d),                       # units of Myr/kpc^2
+            (kappa / sigma_R**2) * np.exp(-kappa * J_r[valid] / sigma_R**2),        # units of Myr/kpc^2
+            (nu / sigma_z**2) * np.exp(-nu * J_z[valid] / sigma_z**2)               # units of Myr/kpc^2
+        ]
+        df_val[valid] = prefactor * np.prod(exp_terms, axis=0)                      # units of Myr^3/kpc^6
+
+
+        ##########################
+        ####
+        ## LOOK HERE!
+        ###
+        ## This is where we modify the DF to only include stars in an annulus
+        ## around the solar radius. We do this by cutting on J_phi.
+
+        df_val[(J_phi < self.phi_cut)] = 0
+
+        ##########################
+
+        return df_val
